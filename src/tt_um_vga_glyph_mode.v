@@ -5,119 +5,94 @@
 
 `default_nettype none
 
-module tt_um_vga_glyph_mode(
-	input  wire [7:0] ui_in,    // Dedicated inputs
-	output wire [7:0] uo_out,   // Dedicated outputs
-	input  wire [7:0] uio_in,   // IOs: Input path
-	output wire [7:0] uio_out,  // IOs: Output path
-	output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-	input  wire       ena,      // always 1 when the design is powered, so you can ignore it
-	input  wire       clk,      // clock
-	input  wire       rst_n     // reset_n - low to reset
+module tt_um_matrix_abc (
+    input  wire [7:0] ui_in,    // Dedicated inputs
+    output wire [7:0] uo_out,   // Dedicated outputs
+    input  wire [7:0] uio_in,   // IOs: Input path
+    output wire [7:0] uio_out,  // IOs: Output path
+    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
+    input  wire       clk,      // clock
+    input  wire       rst_n     // reset_n - low to reset
 );
 
-	// VGA signals
-	wire hsync, vsync, display_on;
-	wire [10:0] hpos;
-	wire [9:0] vpos;
+    // --- VGA Controller Pins Assignment ---
+    wire hsync, vsync, video_on;
+    wire [9:0] pixel_x;
+    wire [9:0] pixel_y;
 
-	// TinyVGA PMOD
-	assign uo_out = {hsync, RGB[0], RGB[2], RGB[4], vsync, RGB[1], RGB[3], RGB[5]};
+    assign uo_out[0] = hsync;
+    assign uo_out[1] = vsync;
+    // Remainder of uo_out usually routes to RGB lines (e.g., bits [7:2] or custom maps)
+    
+    // Assign unused bi-directional pins to safe values or high-Z
+    assign uio_out = 8'b00000000;
+    assign uio_oe  = 8'b00000000;
 
-	// Unused outputs assigned to 0.
-	assign uio_out = 0;
-	assign uio_oe  = 0;
+    // --- VGA Sync Generator Instance ---
+    // (Assuming hvsync_generator or a similar module is bundled in your project)
+    hvsync_generator vga_sync (
+        .clk(clk),
+        .reset(~rst_n),
+        .hsync(hsync),
+        .vsync(vsync),
+        .video_on(video_on),
+        .pixel_x(pixel_x),
+        .pixel_y(pixel_y)
+    );
 
-	wire [7:0] xb = hpos[10:3];
-	wire [6:0] x_mix = {xb[7] ^ xb[3], xb[1], xb[4], xb[1], xb[6], xb[0], xb[2]};
-	wire [2:0] g_x = hpos[2:0];
-	wire [5:0] yb;
-	wire [3:0] _unused;
-	assign {_unused, yb} = vpos / 10'd12;
-	wire [5:0] g_unused;
-	wire [3:0] g_y;
-	assign {g_unused, g_y} = vpos - {yb, 3'b000} - {1'b0, yb, 2'b00};
-	wire hl;
+    // --- Text Matrix / Character Definition for "colegio de muntinlupa" ---
+    // Length of "colegio de muntinlupa" is 21 characters.
+    reg [5:0] char_code;
+    wire [4:0] char_index;
 
-	// Suppress unused signals warning
-	wire _unused_ok = &{ena, ui_in[5:2], uio_in};
+    // Divide pixel_x to create grid columns for characters (e.g., 1 character per 16 or 32 pixels wide)
+    assign char_index = pixel_x[8:4]; // Adjust bits depending on your exact font scale scaling
 
-	reg [9:0] frame;
-	reg rst_drop;
+    // Mapping 0-20 to ASCII/Custom encoding index equivalents for "colegio de muntinlupa"
+    // Using standard custom 6-bit index mapping (A=1, B=2, C=3, ..., Space=0 or 32)
+    always @(*) begin
+        case (char_index)
+            5'd0:  char_code = 6'd3;  // 'c'
+            5'd1:  char_code = 6'd15; // 'o'
+            5'd2:  char_code = 6'd12; // 'l'
+            5'd3:  char_code = 6'd5;  // 'e'
+            5'd4:  char_code = 6'd7;  // 'g'
+            5'd5:  char_code = 6'd9;  // 'i'
+            5'd6:  char_code = 6'd15; // 'o'
+            5'd7:  char_code = 6'd0;  // ' ' (Space)
+            5'd8:  char_code = 6'd4;  // 'd'
+            5'd9:  char_code = 6'd5;  // 'e'
+            5'd10: char_code = 6'd0;  // ' ' (Space)
+            5'd11: char_code = 6'd13; // 'm'
+            5'd12: char_code = 6'd21; // 'u'
+            5'd13: char_code = 6'd14; // 'n'
+            5'd14: char_code = 6'd20; // 't'
+            5'd15: char_code = 6'd9;  // 'i'
+            5'd16: char_code = 6'd14; // 'n'
+            5'd17: char_code = 6'd12; // 'l'
+            5'd18: char_code = 6'd21; // 'u'
+            5'd19: char_code = 6'd16; // 'p'
+            5'd20: char_code = 6'd1;  // 'a'
+            default: char_code = 6'd0; // Clear / Empty space
+        endcase
+    end
 
-	// VGA output
-	hvsync_generator hvsync_gen(
-		.clk(clk),
-		.reset(~rst_n),
-		.mode(ui_in[7:6]),
-		.hsync(hsync),
-		.vsync(vsync),
-		.display_on(display_on),
-		.hpos(hpos),
-		.vpos(vpos)
-	);
+    // --- Font Generation Bit-mapping ---
+    wire font_bit;
+    // Internal instance passing `char_code` plus row indexing (`pixel_y[3:0]`) 
+    // down to your alphabet matrix generation sub-module to retrieve individual pixels.
+    font_rom font_unit (
+        .char_code(char_code),
+        .row(pixel_y[4:1]),
+        .col(pixel_x[3:1]),
+        .bit_out(font_bit)
+    );
 
-	// glyphs
-	glyphs_rom glyphs(
-		.c(glyph_index),
-		.y(g_y),
-		.x(g_x),
-		.pixel(hl)
-	);
-
-	// palette
-	wire [5:0] color;
-	palette_rom palettes(
-		.cid(y),
-		.pid(ui_in[1:0]),
-		.color(color)
-	);
-
-	// there are 51 glyphs
-	//wire [5:0] glyph_index = {xb[2] ^ yb[0], xb[0] ^ yb[1], xb[1] ^ yb[2], xb[4] ^ yb[3], xb[3] ^ yb[4]} // [0,31]
-	//	+ {1'b0, xb[5] ^ yb[5], xb[6] ^ yb[0], xb[0] ^ yb[1], xb[1] ^ yb[2]} // [0,15]
-	//	+ {1'b0, x[6:3]} // [0,15]
-	//	+ {1'b0, t & frame[7], t & frame[6], t & frame[5], t & frame[4] & s}; // [0,15]
-
-	//wire [5:0] glyph_index = (yb + xb) % 6'd19;
-	//wire [5:0] glyph_index = (yb + xb) % 6'd30;
-	wire [5:0] glyph_index = (yb + xb) % 6'd38;
-	
-	wire [1:0] a = xb[1:0];
-	wire [3:0] b = xb[5:2];
-	wire [2:0] d = xb[3:2] + 2'd3;
-
-	wire t = &{xb[0] ^ yb[2] ^ frame[7], xb[1] ^ yb[1] ^ frame[8], xb[2] ^ yb[3] ^ frame[9], xb[3] ^ yb[0]}; // toggle glyph
-
-	// column features
-	wire s = ^xb[6:0]; // speed of rain
-	wire n = xb[1] ^ xb[3] ^ xb[5]; // lit on or off
-
-	wire [6:0] v = (s ? frame[8:2] : frame[9:3]) - yb - x_mix;
-	wire [3:0] c = {1'b0, a} + d;
-	wire [6:0] e = {3'b000, b} << c;
-	wire [6:0] f = v & e;
-	wire [6:0] x = v >> a;
-	wire [2:0] y = ~x[2:0];
-	wire [9:0] drop = {1'b0, yb, 3'd0} >> s;
-	wire drop_bit = ({3'd0, x_mix} + drop > frame) & ~rst_drop;
-	wire [5:0] glyph_color = {6{drop_bit}} ^ color;
-
-	wire [5:0] z = (&(~v[2:0]) & &(y)) ? 6'd63 : glyph_color;
-
-	wire [5:0] RGB = (display_on & hl & ~(|f | n | drop_bit)) ? z : 6'd0;
-
-	always @(posedge vsync, negedge rst_n) begin
-		if (~rst_n) begin
-			rst_drop <= 0;
-			frame <= 0;
-		end else begin
-			if (&frame) begin
-				rst_drop <= 1;
-			end
-			frame <= frame + 1;
-		end
-	end
+    // --- Video Output Multiplexing ---
+    // Outputs pixels when video_on framework window active and character text bit is high.
+    wire pixel_data = video_on && font_bit;
+    
+    // RGB outputs to uo_out (adjust color bit indices according to your DAC configuration)
+    assign uo_out[7:2] = pixel_data ? 6'b111111 : 6'b000000;
 
 endmodule
-
